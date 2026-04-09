@@ -1,4 +1,7 @@
 import numpy as np
+import numpy as np
+import matplotlib.pyplot as plt
+
 
 
 # ------------------------------------------------------------
@@ -46,7 +49,63 @@ def cg_solve(A, b, x0=None, tol=1e-8, max_iter=5000):
         rs_old = rs_new
 
     return x
+import numpy as np
+import matplotlib.pyplot as plt
 
+
+def poiseuille_analytic_profile(y, Lx, Ly, P_in, P_out, nu):
+    """
+    Аналитический профиль Пуазёйля для канала:
+        u(y) = (dp/dx)/(2*nu) * y * (Ly - y)
+    где dp/dx = (P_out - P_in)/Lx.
+    Эквивалентно:
+        u(y) = ((P_in - P_out)/(2*nu*Lx)) * y * (Ly - y)
+    """
+    fx = (P_in - P_out) / Lx
+    return (fx / (2.0 * nu)) * y * (Ly - y)
+
+
+def compare_with_poiseuille(u_full, hx, hy, Lx, Ly, P_in, P_out, nu, make_plot=True):
+    """
+    Сравнивает численный профиль u(y) с аналитическим решением Пуазёйля.
+    Берём усреднение по x по внутренним значениям, потому что u в MAC-сетке
+    зависит от x-индекса на вертикальных гранях.
+    """
+    Ny = u_full.shape[1]
+
+    # y-координаты для u: это центры по y
+    y_u = (np.arange(Ny) + 0.5) * hy
+
+    # численный профиль: усредняем по x, исключая граничные нули
+    u_num = np.mean(u_full[1:-1, :], axis=0)
+
+    # аналитика
+    u_exact = poiseuille_analytic_profile(y_u, Lx, Ly, P_in, P_out, nu)
+
+    # ошибки
+    abs_err = np.abs(u_num - u_exact)
+    max_err = np.max(abs_err)
+    l2_err = np.sqrt(np.mean((u_num - u_exact) ** 2))
+    rel_l2_err = l2_err / max(1e-14, np.sqrt(np.mean(u_exact ** 2)))
+
+    print("\nПроверка профиля Пуазёйля")
+    print(f"max error     = {max_err:.6e}")
+    print(f"L2 error      = {l2_err:.6e}")
+    print(f"relative L2   = {rel_l2_err:.6e}")
+
+    if make_plot:
+        plt.figure(figsize=(7, 4))
+        plt.plot(y_u, u_num, label="численный профиль u(y)")
+        plt.plot(y_u, u_exact, "--", label="аналитика Пуазёйля")
+        plt.xlabel("y")
+        plt.ylabel("u")
+        plt.title("Сравнение профиля скорости")
+        plt.grid(True)
+        plt.legend()
+        plt.tight_layout()
+        plt.show()
+
+    return y_u, u_num, u_exact, abs_err
 
 # ------------------------------------------------------------
 # Дискретные операторы на MAC-сетке
@@ -92,10 +151,9 @@ def embed_u(u_int):
     Границы i=0 и i=Nx равны 0.
     """
     Nx_minus_1, Ny = u_int.shape
-    u = np.zeros((Nx_minus_1 + 1, Ny))
+    u = np.zeros((Nx_minus_1 + 2, Ny))   # <-- было +1, надо +2
     u[1:-1, :] = u_int
     return u
-
 
 def embed_v(v_int):
     """
@@ -103,7 +161,7 @@ def embed_v(v_int):
     Границы j=0 и j=Ny равны 0.
     """
     Nx, Ny_minus_1 = v_int.shape
-    v = np.zeros((Nx, Ny_minus_1 + 1))
+    v = np.zeros((Nx, Ny_minus_1 + 2))   # <-- было +1, надо +2
     v[:, 1:-1] = v_int
     return v
 
@@ -204,18 +262,17 @@ def solve_stokes_uzawa(
 # ------------------------------------------------------------
 # Пример запуска
 # ------------------------------------------------------------
-
 if __name__ == "__main__":
-    Nx = 64
-    Ny = 64
-    Lx = 1.0
+    Lx = 4.0
     Ly = 1.0
+    Nx = 256
+    Ny = 64
     nu = 1.0
 
-    # Сила задана на гранях
-    # u: shape (Nx-1, Ny)
-    # v: shape (Nx, Ny-1)
-    fx_u = np.ones((Nx - 1, Ny))
+    P_in = 1.0
+    P_out = 0.0
+
+    fx_u = ((P_in - P_out) / Lx) * np.ones((Nx - 1, Ny))
     fy_v = np.zeros((Nx, Ny - 1))
 
     u, v, p, hx, hy = solve_stokes_uzawa(
@@ -233,3 +290,7 @@ if __name__ == "__main__":
     print("u shape:", u.shape)
     print("v shape:", v.shape)
     print("p shape:", p.shape)
+
+    # Сравнение с Пуазёйлем
+    compare_with_poiseuille(u, hx, hy, Lx, Ly, P_in, P_out, nu, make_plot=True)
+
