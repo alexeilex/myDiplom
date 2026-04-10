@@ -38,7 +38,8 @@
 		{"id":"736feb6e6b5780a7","type":"file","file":"Проекты/Диплом(оптимизация метода Узавы, чтобы одна итерация была)/Как выглядит постановка задачи после первого общения с Василием.md","x":2180,"y":15700,"width":480,"height":480},
 		{"id":"0311c52821659847","type":"file","file":"Проекты/Диплом(оптимизация метода Узавы, чтобы одна итерация была)/Как выглядит первая версия программы.md","x":2100,"y":16280,"width":520,"height":1120},
 		{"id":"b09005f620a74336","type":"file","file":"Проекты/Диплом(оптимизация метода Узавы, чтобы одна итерация была)/MAC-сетка.md","x":1500,"y":16620,"width":520,"height":500},
-		{"id":"c46de086cb10bc8a","type":"file","file":"Проекты/Диплом(оптимизация метода Узавы, чтобы одна итерация была)/Посчитанные вручную уравнения для составления матриц A,B.md","x":1990,"y":18800,"width":980,"height":1060}
+		{"id":"c46de086cb10bc8a","type":"file","file":"Проекты/Диплом(оптимизация метода Узавы, чтобы одна итерация была)/Посчитанные вручную уравнения для составления матриц A,B.md","x":1990,"y":18800,"width":980,"height":1060},
+		{"id":"1d927f48afbda21d","x":2280,"y":20020,"width":400,"height":400,"type":"file","file":"Проекты/Диплом(оптимизация метода Узавы, чтобы одна итерация была)/Решение первой поставленной задачи, результаты.md"}
 	],
 	"edges":[
 		{"id":"957f6cbd4b0a344d","fromNode":"b1b16aff4491a60e","fromSide":"bottom","toNode":"562c782bbb4b22e4","toSide":"top"},
@@ -63,6 +64,8 @@
 		{"id":"fe375ca9c29df0b5","fromNode":"a446793686a8e5e2","fromSide":"right","toNode":"ddbfd74f13376b26","toSide":"left"},
 		{"id":"63fd9448b3dcd1c6","fromNode":"a446793686a8e5e2","fromSide":"bottom","toNode":"7f04d91a7f96ff40","toSide":"top"},
 		{"id":"7f00d597b33f98af","fromNode":"7f04d91a7f96ff40","fromSide":"left","toNode":"8db95a5cda0fa726","toSide":"right"},
-		{"id":"b9320c465af161e7","fromNode":"7f04d91a7f96ff40","fromSide":"right","toNode":"c9bb0938a4317f4e","toSide":"left"}
+		{"id":"b9320c465af161e7","fromNode":"7f04d91a7f96ff40","fromSide":"right","toNode":"c9bb0938a4317f4e","toSide":"left"},
+		{"id":"2890dca4dfdbc6cb","fromNode":"c46de086cb10bc8a","fromSide":"bottom","toNode":"1d927f48afbda21d","toSide":"top"},
+		{"id":"109200a90a6cad0c","fromNode":"e01d9282dc99b653","fromSide":"bottom","toNode":"c46de086cb10bc8a","toSide":"top"}
 	]
 }
