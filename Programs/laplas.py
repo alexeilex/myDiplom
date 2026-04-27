@@ -1,249 +1,285 @@
 import numpy as np
 import scipy.sparse as sp
+import scipy.sparse.linalg as spla
 import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
 
-def plot_solutions_3d(p_num, p_ex, Lx, Ly, scale_error=1.0):
-    # --- ЖЁСТКО приводим к numpy ---
-    if hasattr(p_num, "toarray"):
-        p_num = p_num.toarray()
-    p_num = np.asarray(p_num, dtype=float)
 
-    if hasattr(p_ex, "toarray"):
-        p_ex = p_ex.toarray()
-    p_ex = np.asarray(p_ex, dtype=float)
+# ==============================================================================
+# Сборка матрицы для задачи Δp = 0 в криволинейной области
+# ==============================================================================
+def build_system_curved(Nx, Ny, Lx, Ly, f_bottom, f_top,
+                        P_left_func=None, P_right_func=None,
+                        P_in=None, P_out=None):
+    """
+    Строит систему A p = b для активных ячеек криволинейной области.
 
-    # Проверка формы
-    if p_num.shape != p_ex.shape:
-        raise ValueError(f"Shape mismatch: {p_num.shape} vs {p_ex.shape}")
-
-    Nx, Ny = p_num.shape
+    Параметры:
+    ----------
+    Nx, Ny : int
+        количество ячеек по x и y.
+    Lx, Ly : float
+        размеры расчётной области (прямоугольная сетка).
+    f_bottom, f_top : callable
+        функции одной переменной x, задающие нижнюю и верхнюю границы области.
+    P_left_func, P_right_func : callable (или None)
+        функции давления на левой (x=0) и правой (x=Lx) границах.
+        Если не заданы, используются постоянные значения P_in и P_out.
+    P_in, P_out : float
+        постоянные давления на левой и правой границах (используются,
+        если P_left_func / P_right_func не переданы).
+    """
+    # Если функции давления не заданы, создаём константные
+    if P_left_func is None:
+        P_left_func = lambda y: P_in
+    if P_right_func is None:
+        P_right_func = lambda y: P_out
 
     hx = Lx / Nx
     hy = Ly / Ny
-
-    x = (np.arange(Nx) + 0.5) * hx
-    y = (np.arange(Ny) + 0.5) * hy
-
-    X, Y = np.meshgrid(x, y, indexing='ij')
-
-    error = p_num - p_ex
-
-    fig = plt.figure(figsize=(18, 5))
-
-    # Численное
-    ax1 = fig.add_subplot(131, projection='3d')
-    ax1.plot_surface(X, Y, p_num)
-    ax1.set_title("Numerical")
-
-    # Точное
-    ax2 = fig.add_subplot(132, projection='3d')
-    ax2.plot_surface(X, Y, p_ex)
-    ax2.set_title("Exact")
-
-    # Ошибка
-    ax3 = fig.add_subplot(133, projection='3d')
-    ax3.plot_surface(X, Y, scale_error * error)
-    ax3.set_title(f"Error x{scale_error}")
-
-    plt.tight_layout()
-    plt.show()
-def idx(i, j, Nx):
-    """
-    Нумерация неизвестных p[i,j] в один индекс:
-    k = i + j*Nx
-    i = 0..Nx-1, j = 0..Ny-1
-    """
-    return i + j * Nx
-
-
-def build_system(Nx, Ny, Lx, Ly, P_in, P_out):
-    """
-    Строит систему A p = b для задачи
-
-        Δ p = 0
-
-    на прямоугольнике [0, Lx] x [0, Ly] со следующими условиями:
-        p(0, y)   = P_in
-        p(Lx, y)  = P_out
-        ∂p/∂y = 0 на y=0 и y=Ly
-
-    Неизвестные p[i,j] расположены в центрах ячеек.
-    Схема ровно соответствует твоей записи:
-        ( (p_{i+1,j}-p_{i,j})/hx - (p_{i,j}-p_{i-1,j})/hx ) / hx
-      + ( (p_{i,j+1}-p_{i,j})/hy - (p_{i,j}-p_{i,j-1})/hy ) / hy
-    """
-    hx = Lx / Nx
-    hy = Ly / Ny
-
     ax = 1.0 / hx**2
     ay = 1.0 / hy**2
 
-    N = Nx * Ny
-    A = sp.lil_matrix((N, N), dtype=float)
-    b = np.zeros(N, dtype=float)
+    # Центры ячеек
+    x_centers = (np.arange(Nx) + 0.5) * hx
+    y_centers = (np.arange(Ny) + 0.5) * hy
 
-    for j in range(Ny):
-        for i in range(Nx):
-            k = idx(i, j, Nx)
+    # Маска активных ячеек (центр строго внутри области)
+    inside = np.zeros((Nx, Ny), dtype=bool)
+    for i in range(Nx):
+        for j in range(Ny):
+            yb = f_bottom(x_centers[i])
+            yt = f_top(x_centers[i])
+            if yb < y_centers[j] < yt:
+                inside[i, j] = True
 
-            # -------------------
-            # x-направление
-            # -------------------
-            if Nx == 1:
-                # Если одна колонка, то слева и справа одновременно границы
-                # Δ_x p = (P_out - 2 p + P_in)/hx^2
-                A[k, k] += -2.0 * ax
-                b[k] += -ax * (P_in + P_out)
+    # Нумерация только активных ячеек
+    idx_map = -np.ones((Nx, Ny), dtype=int)
+    active = np.argwhere(inside)
+    for k, (i, j) in enumerate(active):
+        idx_map[i, j] = k
+    N_active = len(active)
 
-            elif i == 0:
-                # Левая граница:
-                # (p_{1,j} - 2 p_{0,j} + P_in) / hx^2
-                A[k, k] += -2.0 * ax
-                A[k, idx(i + 1, j, Nx)] += ax
-                b[k] += -ax * P_in
+    A = sp.lil_matrix((N_active, N_active), dtype=float)
+    b = np.zeros(N_active, dtype=float)
 
-            elif i == Nx - 1:
-                # Правая граница:
-                # (P_out - 2 p_{Nx-1,j} + p_{Nx-2,j}) / hx^2
-                A[k, k] += -2.0 * ax
-                A[k, idx(i - 1, j, Nx)] += ax
-                b[k] += -ax * P_out
+    for (i, j) in active:
+        k = idx_map[i, j]
+        diag = -2.0 * ax - 2.0 * ay
 
+        # --- горизонтальные соседи (ось x) ---
+        # левый сосед
+        if i - 1 >= 0:
+            if inside[i-1, j]:
+                A[k, idx_map[i-1, j]] += ax
             else:
-                # Внутренняя точка
-                A[k, k] += -2.0 * ax
-                A[k, idx(i - 1, j, Nx)] += ax
-                A[k, idx(i + 1, j, Nx)] += ax
+                diag += ax          # твёрдая стенка (Нейман)
+        else:                       # открытая левая граница
+            yj = y_centers[j]
+            p_val = P_left_func(yj)
+            diag -= ax
+            b[k] -= 2.0 * ax * p_val
 
-            # -------------------
-            # y-направление
-            # -------------------
-            if Ny == 1:
-                # Одна строка по y: вклад по y отсутствует
-                pass
-
-            elif j == 0:
-                # Нижняя граница: ∂p/∂y = 0
-                # (p_{i,1} - p_{i,0}) / hy^2
-                A[k, k] += -1.0 * ay
-                A[k, idx(i, j + 1, Nx)] += ay
-
-            elif j == Ny - 1:
-                # Верхняя граница: ∂p/∂y = 0
-                # (p_{i,Ny-2} - p_{i,Ny-1}) / hy^2
-                A[k, k] += -1.0 * ay
-                A[k, idx(i, j - 1, Nx)] += ay
-
+        # правый сосед
+        if i + 1 < Nx:
+            if inside[i+1, j]:
+                A[k, idx_map[i+1, j]] += ax
             else:
-                # Внутренняя точка
-                A[k, k] += -2.0 * ay
-                A[k, idx(i, j - 1, Nx)] += ay
-                A[k, idx(i, j + 1, Nx)] += ay
+                diag += ax
+        else:                       # открытая правая граница
+            yj = y_centers[j]
+            p_val = P_right_func(yj)
+            diag -= ax
+            b[k] -= 2.0 * ax * p_val
 
-    return A.tocsr(), b, hx, hy
+        # --- вертикальные соседи (ось y) ---
+        # нижний сосед
+        if j - 1 >= 0:
+            if inside[i, j-1]:
+                A[k, idx_map[i, j-1]] += ay
+            else:
+                diag += ay          # твёрдая стенка (Нейман)
+        else:
+            diag += ay
+
+        # верхний сосед
+        if j + 1 < Ny:
+            if inside[i, j+1]:
+                A[k, idx_map[i, j+1]] += ay
+            else:
+                diag += ay
+        else:
+            diag += ay
+
+        A[k, k] = diag
+
+    return A.tocsr(), b, hx, hy, inside, x_centers, y_centers
 
 
-def discrete_exact_solution(Nx, Ny, P_in, P_out):
+# ==============================================================================
+# Решение задачи
+# ==============================================================================
+def solve_curved(Nx, Ny, Lx, Ly, f_bottom, f_top,
+                 P_left_func=None, P_right_func=None,
+                 P_in=None, P_out=None):
     """
-    Точное решение именно ДИСКРЕТНОЙ задачи для этой постановки.
-
-    Для каждой строки по y решение одинаковое:
-        p_i = ((Nx - i) * P_in + (i + 1) * P_out) / (Nx + 1)
-
-    Это удовлетворяет A p = b для собранной выше схемы.
+    Решает уравнение Лапласа в криволинейной области.
+    Возвращает:
+        A, b, p_active, p_full, inside, xc, yc
+    p_full – (Nx, Ny) массив, неактивные ячейки заполнены NaN.
     """
-    x_vals = np.array([
-        ((Nx - i) * P_in + (i + 1) * P_out) / (Nx + 1)
-        for i in range(Nx)
-    ], dtype=float)
-    p = np.repeat(x_vals[:, None], Ny, axis=1)
-    return p
+    A, b, hx, hy, inside, xc, yc = build_system_curved(
+        Nx, Ny, Lx, Ly, f_bottom, f_top,
+        P_left_func, P_right_func, P_in, P_out
+    )
+    p_active = spla.spsolve(A, b)
+
+    # Восстановление полного поля
+    p_full = np.full((Nx, Ny), np.nan)
+    for k, (i, j) in enumerate(np.argwhere(inside)):
+        p_full[i, j] = p_active[k]
+
+    return A, b, p_active, p_full, inside, xc, yc
 
 
-def continuous_exact_solution(Nx, Ny, Lx, Ly, P_in, P_out):
-    """
-    Точное решение непрерывной задачи:
-        p(x, y) = P_in + (P_out - P_in) * x / Lx
-    на центрах ячеек.
-    """
-    hx = Lx / Nx
-    x = (np.arange(Nx) + 0.5) * hx
-    p = P_in + (P_out - P_in) * (x[:, None] / Lx)
-    p = np.repeat(p, Ny, axis=1)
-    return p
-
-
-def residual_norm(A, p):
-    """
-    Норма невязки ||A p - b||_∞ и ||A p - b||_2,
-    если b уже известен снаружи.
-    """
-    raise NotImplementedError("Use residual_norm_with_rhs(A, p, b)")
-
-
-def residual_norm_with_rhs(A, p, b):
-    r = A @ p.reshape(-1, order="F") - b
-    return np.max(np.abs(r)), np.sqrt(np.mean(r**2))
-
-
+# ==============================================================================
+# Вычисление ошибок (только для активных ячеек)
+# ==============================================================================
 def error_norms(p_num, p_ex):
-    err = p_num - p_ex
+    """
+    Сравнение численного и точного решений.
+    Возвращает (максимальная ошибка, L2-ошибка, относительная L2-ошибка).
+    """
+    mask = ~np.isnan(p_num)
+    err = p_num[mask] - p_ex[mask]
+    if len(err) == 0:
+        return 0.0, 0.0, 0.0
     max_err = np.max(np.abs(err))
     l2_err = np.sqrt(np.mean(err**2))
-    rel_l2_err = l2_err / max(1e-14, np.sqrt(np.mean(p_ex**2)))
-    return max_err, l2_err, rel_l2_err
+    rel_l2 = l2_err / max(1e-14, np.sqrt(np.mean(p_ex[mask]**2)))
+    return max_err, l2_err, rel_l2
 
 
-def run_case(Nx, Ny, Lx, Ly, P_in, P_out, print_matrix=False):
-    A, b, hx, hy = build_system(Nx, Ny, Lx, Ly, P_in, P_out)
+# ==============================================================================
+# Визуализация
+# ==============================================================================
+def plot_pressure(p_full, Lx, Ly, f_bottom, f_top, title="Давление"):
+    """
+    Рисует поле давления p_full (неактивные ячейки = NaN).
+    """
+    Nx, Ny = p_full.shape
+    xc = (np.arange(Nx) + 0.5) * (Lx / Nx)
+    x_edges = np.linspace(0, Lx, Nx + 1)
+    y_edges = np.linspace(0, Ly, Ny + 1)
 
-    # Дискретно-точное решение для этой постановки
-    p_num = discrete_exact_solution(Nx, Ny, P_in, P_out)
-
-    # Непрерывное точное решение (линейная функция)
-    p_ex = continuous_exact_solution(Nx, Ny, Lx, Ly, P_in, P_out)
-
-    # Невязка именно для собранной матрицы
-    res_inf, res_rms = residual_norm_with_rhs(A, p_num, b)
-
-    # Ошибка относительно непрерывного решения
-    max_err, l2_err, rel_l2_err = error_norms(p_num, p_ex)
-
-    print(f"\nСетка {Nx}x{Ny}")
-    print(f"hx = {hx:.6e}, hy = {hy:.6e}")
-    #print(f"residual inf-norm = {res_inf:.6e}")
-    #print(f"residual rms      = {res_rms:.6e}")
-    print(f"max error         = {max_err:.6e}")
-    #print(f"L2 error          = {l2_err:.6e}")
-    #print(f"relative L2       = {rel_l2_err:.6e}")
-
-    if print_matrix:
-        np.set_printoptions(precision=3, suppress=True)
-        print("\nA =")
-        print(A.toarray())
-        print("\nb =")
-        print(b)
-        print("\nDiscrete exact solution p_num =")
-        print(p_num)
-        print("\nContinuous exact solution p_ex =")
-        print(p_ex)
-
-    return A, b, p_num, p_ex
+    plt.figure(figsize=(8, 4))
+    plt.pcolormesh(x_edges, y_edges, p_full.T, shading='flat', cmap='viridis')
+    plt.colorbar(label='p')
+    plt.plot(xc, f_bottom(xc), 'k', lw=2, label='bottom')
+    plt.plot(xc, f_top(xc), 'k', lw=2, label='top')
+    plt.title(title)
+    plt.xlabel('x')
+    plt.ylabel('y')
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(title, dpi=150, bbox_inches='tight')
+    print("Plot saved as " + title)
 
 
-if __name__ == "__main__":
+# ==============================================================================
+# Тесты
+# ==============================================================================
+def horizontal_test():
+    # -------------------------------
+    # Тест 1: Прямоугольная область
+    # -------------------------------
+    print("=== Тест 1: Прямые горизонтальные стенки ===")
     Lx = 3.0
     Ly = 2.0
     P_in = 1.0
     P_out = 2.0
+    f_bottom_rect = lambda x: np.zeros_like(x)
+    f_top_rect    = lambda x: np.full_like(x, Ly)
 
-    # Маленькая сетка: здесь удобно сверять матрицу вручную
-    A, b,p_num, p_ex = run_case(3, 2, Lx, Ly, P_in, P_out,print_matrix=True)
-    plot_solutions_3d(p_num, p_ex, Lx, Ly, scale_error=1)
-    # Проверка на другой ориентации
-    run_case(2, 3, Lx, Ly, P_in, P_out, print_matrix=False)
+    for Nx, Ny in [(3, 2), (30, 20), (300, 200)]:
+        A, b, p_act, p_full, inside, xc, yc = solve_curved(
+            Nx, Ny, Lx, Ly, f_bottom_rect, f_top_rect,
+            P_in=P_in, P_out=P_out
+        )
+        # Точное решение (линейное по x)
+        Xc, Yc = np.meshgrid(xc, yc, indexing='ij')
+        p_ex = P_in + (P_out - P_in) * (Xc / Lx)
 
-    # Более крупные сетки
-    for Nx, Ny in [(30, 20), (300, 200)]:
-        run_case(Nx, Ny, Lx, Ly, P_in, P_out, print_matrix=False)
+        max_err, l2_err, rel_l2 = error_norms(p_full, p_ex)
+        print(f"Сетка {Nx}x{Ny}: активных {np.sum(inside)}, "
+              f"max err = {max_err:.2e}, L2 err = {l2_err:.2e}")
+
+    # Визуализация последней сетки
+    plot_pressure(p_full, Lx, Ly, f_bottom_rect, f_top_rect,
+                  title="Прямоугольная_область.png")
+def paralelogram_test():
+    # -------------------------------
+    # Тест 2: Параллелограмм
+    # -------------------------------
+    print("\n=== Тест 2: Параллелограмм (наклонные стенки) ===")
+    Lx = 3.0
+    Ly = 5.0               # чтобы вместить наклон
+
+    # Граничные кривые
+    f_bottom_par = lambda x: (4/3) * x
+    f_top_par    = lambda x: (4/3) * x + 1.0
+
+    # Точное линейное решение: p(x,y) = (3x + 4y)/25
+    p_exact_func = lambda x, y: (3*x + 4*y) / 25.0
+
+    # Граничные давления на левой и правой границах
+    P_left_func  = lambda y: p_exact_func(0, y)    # 4y/25
+    P_right_func = lambda y: p_exact_func(Lx, y)   # (9+4y)/25
+
+    for Nx, Ny in [(30, 50), (60, 100), (120, 200)]:
+        A, b, p_act, p_full, inside, xc, yc = solve_curved(
+            Nx, Ny, Lx, Ly, f_bottom_par, f_top_par,
+            P_left_func=P_left_func,
+            P_right_func=P_right_func
+        )
+        # Точное поле на центрах ячеек
+        Xc, Yc = np.meshgrid(xc, yc, indexing='ij')
+        p_ex = p_exact_func(Xc, Yc)
+
+        max_err, l2_err, rel_l2 = error_norms(p_full, p_ex)
+        print(f"Сетка {Nx}x{Ny}: активных {np.sum(inside)}, "
+              f"max err = {max_err:.2e}, L2 err = {l2_err:.2e}")
+
+
+if __name__ == "__main__":
+    #paralelogram_test()
+    print("\n=== Тест 3: Синусоидальный канал ===")
+
+    wm = 1e-3        # механическая ширина
+    delta = 0.8
+    Lw = 1.25e-3
+    Lx = 1.25e-3      # длина канала
+
+    # Сдвигаем геометрию так, чтобы она находилась полностью в [0, Ly]
+    Ly = 3.2e-3      # чуть больше максимальной ширины
+    shift = Ly / 2   # 0.6e-3
+
+    f_bottom = lambda x: shift - 0.5 * wm * (1 + delta * np.sin(2 * np.pi * x / Lw))
+    f_top    = lambda x: shift + 0.5 * wm * (1 + delta * np.sin(2 * np.pi * x / Lw))
+
+    # Граничные давления
+    P_in = 15.7
+    P_out = 14.4
+
+    # Размер сетки (возьмём умеренный)
+    Nx = 100
+    Ny = 40
+
+    A, b, p_act, p_full, inside, xc, yc = solve_curved(
+        Nx, Ny, Lx, Ly, f_bottom, f_top,
+        P_in=P_in, P_out=P_out
+    )
+
+    print(f"Активных ячеек: {np.sum(inside)} из {Nx*Ny}")
+
+    # Визуализация
+    plot_pressure(p_full, Lx, Ly, f_bottom, f_top, title="синусоида.png")
